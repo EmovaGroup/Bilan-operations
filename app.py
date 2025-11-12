@@ -475,9 +475,10 @@ def kpi_card(title, period, valA, valB, pct_text):
     """, unsafe_allow_html=True)
 
 def pct(a, b):
-    if a in (0, None) or (isinstance(a, float) and (math.isnan(a) or math.isinf(a))):
+    # % = (A - B) / B
+    if b in (0, None) or (isinstance(b, float) and (math.isnan(b) or math.isinf(b))):
         return "—"
-    return f"{((b - a) / a) * 100:+.1f}%".replace(".", ",")
+    return f"{((a - b) / b) * 100:+.1f}%".replace(".", ",")
 
 CA_A, CA_B = dfA["ca"].sum(), dfB["ca"].sum()
 T_A,  T_B  = dfA["tickets"].sum(), dfB["tickets"].sum()
@@ -553,15 +554,17 @@ st.caption("Panier moyen par jour d’opération");  plot_daily_metric(A_daily, 
 
 st.divider()
 
-# ---------------------- COMPARATIF & DELTAS ---------------------------
+# ---------------------- COMPARATIF & DELTAS (A vs B) ---------------------------
 dfJ = dfA.merge(dfB, on="code_magasin", suffixes=("_A","_B"))
-for col in ["ca","tickets","pm","cout_fid","cout_ermes","quantite_totale_achete"]:
-    dfJ[f"delta_{col}"] = dfJ[f"{col}_B"] - dfJ[f"{col}_A"]
-    baseA = dfJ[f"{col}_A"].replace(0, np.nan)
-    dfJ[f"pct_{col}"] = (dfJ[f"delta_{col}"] / baseA * 100).replace([np.inf,-np.inf], np.nan)
 
-# ---------------------- CARTE FRANCE PAR RÉGION (ΔCA%) ----------------
-st.subheader("🗺️ Carte des performances régionales – variation CA (B vs A)")
+# Δ = A - B ; % = (A - B) / B
+for col in ["ca","tickets","pm","cout_fid","cout_ermes","quantite_totale_achete"]:
+    dfJ[f"delta_{col}"] = dfJ[f"{col}_A"] - dfJ[f"{col}_B"]
+    baseB = dfJ[f"{col}_B"].replace(0, np.nan)
+    dfJ[f"pct_{col}"] = (dfJ[f"delta_{col}"] / baseB * 100).replace([np.inf,-np.inf], np.nan)
+
+# ---------------------- CARTE FRANCE PAR RÉGION (A vs B) ----------------
+st.subheader("🗺️ Carte des performances régionales – variation CA (A vs B)")
 
 @st.cache_data(ttl=3600)
 def load_france_regions_geojson():
@@ -570,15 +573,17 @@ def load_france_regions_geojson():
     r.raise_for_status()
     return r.json()
 
-df_region_B = dfB.merge(df_mag[["code_magasin","region_admin"]], on="code_magasin", how="left") \
-                 .groupby("region_admin", as_index=False).agg(ca_B=("ca","sum"), tickets_B=("tickets","sum"))
 df_region_A = dfA.merge(df_mag[["code_magasin","region_admin"]], on="code_magasin", how="left") \
-                 .groupby("region_admin", as_index=False).agg(ca_A=("ca","sum"))
+                 .groupby("region_admin", as_index=False).agg(ca_A=("ca","sum"), tickets_A=("tickets","sum"))
+df_region_B = dfB.merge(df_mag[["code_magasin","region_admin"]], on="code_magasin", how="left") \
+                 .groupby("region_admin", as_index=False).agg(ca_B=("ca","sum"))
 
-df_region = df_region_B.merge(df_region_A, on="region_admin", how="outer").fillna(0)
-df_region["variation_CA"] = np.where(df_region["ca_A"]>0,
-                                     (df_region["ca_B"]-df_region["ca_A"]) / df_region["ca_A"] * 100,
-                                     np.nan)
+df_region = df_region_A.merge(df_region_B, on="region_admin", how="outer").fillna(0)
+df_region["variation_CA"] = np.where(
+    df_region["ca_B"] > 0,
+    (df_region["ca_A"] - df_region["ca_B"]) / df_region["ca_B"] * 100,
+    np.nan
+)
 
 geojson = load_france_regions_geojson()
 
@@ -600,7 +605,7 @@ def plot_regions_plotly(df_region, geojson):
         range_color=[q5, q95],
         hover_data={"ca_A": True, "ca_B": True, "variation_CA": True},
         labels={
-            "variation_CA": "Δ CA (%)",
+            "variation_CA": "Δ CA (A vs B) (%)",
             "ca_A": "CA A (€)",
             "ca_B": "CA B (€)"
         },
@@ -614,7 +619,7 @@ def plot_regions_plotly(df_region, geojson):
             "<b>%{location}</b><br>"
             "CA A = %{customdata[0]:,.0f} €<br>"
             "CA B = %{customdata[1]:,.0f} €<br>"
-            "Variation = %{customdata[2]:+.1f} %"
+            "Variation (A vs B) = %{customdata[2]:+.1f} %"
             "</div><extra></extra>"
         )
     )
@@ -627,7 +632,6 @@ def plot_regions_plotly(df_region, geojson):
         paper_bgcolor="white",
         plot_bgcolor="white"
     )
-
     return fig
 
 fig_map_regions = plot_regions_plotly(df_region, geojson)
@@ -636,9 +640,9 @@ st.caption("Vert = progression positive / Rouge = baisse. Survolez pour les vale
 st.divider()
 
 # ---------------------- CARTE POINTS MAGASINS (perf B vs A) -----------
-st.subheader("🗺️ Carte des magasins – couleur = variation CA (B vs A)")
+st.subheader("🗺️ Carte des magasins – couleur = variation CA (A vs B)")
 df_map = dfJ.merge(df_geo, on="code_magasin", how="left").dropna(subset=["latitude","longitude"])
-df_map["pct_ca"] = ((df_map["ca_B"] - df_map["ca_A"]) / df_map["ca_A"].replace(0,np.nan) * 100).replace([np.inf,-np.inf], np.nan)
+df_map["pct_ca"] = ((df_map["ca_A"] - df_map["ca_B"]) / df_map["ca_B"].replace(0,np.nan) * 100).replace([np.inf,-np.inf], np.nan)
 
 def hover_text(row):
     metA = row.get("meteo_A", "—")
@@ -646,17 +650,18 @@ def hover_text(row):
     metA_html = f"<span class='meteo-badge'>{metA}</span>"
     metB_html = f"<span class='meteo-badge'>{metB}</span>"
     return (
+        f"<div style='background-color:#f3f3f3;padding:8px;border-radius:8px;'>"
         f"<b>Magasin {row['code_magasin']}</b><br>"
         f"{opA_label} – CA: {fmt_money(row['ca_A'])} – PM: {fmt_money(row['pm_A'])}<br>"
         f"Météo J1→J5: {metA_html}<br>"
         f"{opB_label} – CA: {fmt_money(row['ca_B'])} – PM: {fmt_money(row['pm_B'])}<br>"
         f"Météo J1→J5: {metB_html}<br>"
-        f"ΔCA: {('—' if pd.isna(row['pct_ca']) else f'{row['pct_ca']:+.1f}%'.replace('.',','))}"
+        f"<b>ΔCA (A vs B):</b> {('—' if pd.isna(row['pct_ca']) else f'{row['pct_ca']:+.1f}%'.replace('.',','))}"
+        f"</div>"
     )
 
 if not df_map.empty:
     df_map["hover"] = df_map.apply(hover_text, axis=1)
-    # quantiles pour range couleur stable
     if df_map["pct_ca"].notna().sum() >= 2:
         p5, p95 = np.nanpercentile(df_map["pct_ca"].dropna(), [5,95])
     else:
@@ -665,9 +670,8 @@ if not df_map.empty:
         df_map,
         lat="latitude", lon="longitude",
         color="pct_ca",
-        size=np.maximum(df_map["ca_B"], 0.01),
+        size=np.maximum(df_map["ca_A"], 0.01),
         hover_name="code_magasin",
-        hover_data={"latitude": False, "longitude": False, "pct_ca": False, "code_magasin": False, "hover": True},
         custom_data=["hover"],
         color_continuous_scale=["#d73027","#fdae61","#ffffbf","#a6d96a","#1a9850"],
         range_color=[p5, p95],
@@ -681,8 +685,8 @@ else:
 
 st.divider()
 
-# ---------------------- RÉGRESSIONS RELATIVES (B vs A) ----------------
-st.subheader("🔍 Analyse marketing – régressions relatives (B vs A)")
+# ---------------------- RÉGRESSIONS RELATIVES (A vs B) ----------------
+st.subheader("🔍 Analyse marketing – régressions relatives (A vs B)")
 
 def regression_plot(df, x_col, y_col, x_label, y_label, title):
     base = df.copy()
@@ -690,46 +694,97 @@ def regression_plot(df, x_col, y_col, x_label, y_label, title):
     if base.shape[0] < 3:
         st.info(f"Pas assez de points pour {title}.")
         return
+
     # Axes robustes
-    x = base[x_col].values; y = base[y_col].values
+    x = base[x_col].values
+    y = base[y_col].values
     a, b = np.polyfit(x, y, 1)
-    xs = np.linspace(np.percentile(x,5), np.percentile(x,95), 100)
-    ys = a*xs + b
-    r2 = 1 - np.sum((y - (a*x+b))**2) / np.sum((y - y.mean())**2)
+    xs = np.linspace(np.percentile(x, 5), np.percentile(x, 95), 100)
+    ys = a * xs + b
+    r2 = 1 - np.sum((y - (a * x + b)) ** 2) / np.sum((y - y.mean()) ** 2)
 
-    fig = px.scatter(base, x=x_col, y=y_col, hover_name="code_magasin", color=y_col,
-                     color_continuous_scale="Blues")
-    fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines",
-                             name=f"Tendance (y={a:.2f}x+{b:.2f}, R²={r2:.2f})",
-                             line=dict(dash="dash")))
-    fig.update_layout(height=380, xaxis_title=x_label, yaxis_title=y_label, title=title)
-    # Ranges
-    fig.update_xaxes(range=[np.percentile(x,5), np.percentile(x,95)])
-    fig.update_yaxes(range=[np.percentile(y,5), np.percentile(y,95)])
+    # Couleur ligne : vert si pente positive, rouge si négative
+    color_line = "#1a9850" if a > 0 else "#d73027"
+
+    # Nouvelle palette visible (pas de blanc)
+    color_scale = [
+        "#0074D9",  # bleu franc
+        "#00C1D4",  # turquoise vif
+        "#2ECC40",  # vert menthe
+        "#FFDC00",  # jaune clair
+        "#FF851B"   # orange vif
+    ]
+
+    # Scatter avec couleurs plus riches
+    fig = px.scatter(
+        base,
+        x=x_col,
+        y=y_col,
+        hover_name="code_magasin",
+        color=y_col,
+        color_continuous_scale=color_scale,
+        title=title,
+    )
+
+    # Ligne de tendance
+    fig.add_trace(
+        go.Scatter(
+            x=xs,
+            y=ys,
+            mode="lines",
+            name=f"Tendance : y = {a:.2f}x + {b:.2f} (R²={r2:.2f})",
+            line=dict(color=color_line, width=3, dash="dot"),
+        )
+    )
+
+    # Fond clair bleuté uniforme
+    fig.update_layout(
+        height=420,
+        margin={"r": 0, "l": 0, "t": 50, "b": 50},
+        font=dict(color="#222", size=13),
+        plot_bgcolor="rgba(230,240,255,0.6)",   # bleu clair doux
+        paper_bgcolor="rgba(235,240,250,0.9)",
+        legend=dict(bgcolor="rgba(255,255,255,0.8)"),
+        title=dict(font=dict(color="#003a5e", size=18), x=0.02),
+    )
+
+    # Axes bien lisibles
+    fig.update_xaxes(
+        title=x_label,
+        range=[np.percentile(x, 5), np.percentile(x, 95)],
+        gridcolor="rgba(160,160,160,0.3)",
+        zerolinecolor="#888"
+    )
+    fig.update_yaxes(
+        title=y_label,
+        range=[np.percentile(y, 5), np.percentile(y, 95)],
+        gridcolor="rgba(160,160,160,0.3)",
+        zerolinecolor="#888"
+    )
+
     st.plotly_chart(fig, use_container_width=True)
-
-    st.caption(f"Pente a={a:.2f} ⇒ +1€ de {x_label} ~ {a:.2f} {y_label}.")
+    st.caption(
+        f"Pente a = {a:.2f} → +1 € de {x_label} ≈ {a:.2f} {y_label} ({'📈' if a > 0 else '📉'})"
+    )
 
 # Deltas utiles
-dfJ["delta_ca"] = dfJ["ca_B"] - dfJ["ca_A"]
-dfJ["delta_pm"] = dfJ["pm_B"] - dfJ["pm_A"]
-dfJ["delta_tickets"] = dfJ["tickets_B"] - dfJ["tickets_A"]
+dfJ["delta_ca"] = dfJ["ca_A"] - dfJ["ca_B"]
+dfJ["delta_pm"] = dfJ["pm_A"] - dfJ["pm_B"]
+dfJ["delta_tickets"] = dfJ["tickets_A"] - dfJ["tickets_B"]
 
-# ΔCA vs FID/ERMES
-regression_plot(dfJ, "cout_fid_B",   "delta_ca",      "FID (SMS) B (€)",   "ΔCA (B - A) €",   "ΔCA ~ FID (SMS)")
-regression_plot(dfJ, "cout_ermes_B", "delta_ca",      "ERMES B (€)",       "ΔCA (B - A) €",   "ΔCA ~ ERMES")
+# ΔCA vs FID/ERMES (côté A)
+regression_plot(dfJ, "cout_fid_A",   "delta_ca",      "FID (SMS) A (€)",   "ΔCA (A - B) €",   "ΔCA ~ FID (SMS)")
+regression_plot(dfJ, "cout_ermes_A", "delta_ca",      "ERMES A (€)",       "ΔCA (A - B) €",   "ΔCA ~ ERMES")
 
-# ΔPM & ΔTickets (optionnel)
-regression_plot(dfJ, "cout_fid_B",   "delta_pm",      "FID (SMS) B (€)",   "ΔPM (B - A) €",   "ΔPM ~ FID (SMS)")
-regression_plot(dfJ, "cout_ermes_B", "delta_pm",      "ERMES B (€)",       "ΔPM (B - A) €",   "ΔPM ~ ERMES")
-regression_plot(dfJ, "cout_fid_B",   "delta_tickets", "FID (SMS) B (€)",   "ΔTickets (B - A)","ΔTickets ~ FID (SMS)")
-regression_plot(dfJ, "cout_ermes_B", "delta_tickets", "ERMES B (€)",       "ΔTickets (B - A)","ΔTickets ~ ERMES")
-
+# (optionnel) ΔPM & ΔTickets
+regression_plot(dfJ, "cout_fid_A",   "delta_pm",      "FID (SMS) A (€)",   "ΔPM (A - B) €",   "ΔPM ~ FID (SMS)")
+regression_plot(dfJ, "cout_ermes_A", "delta_pm",      "ERMES A (€)",       "ΔPM (A - B) €",   "ΔPM ~ ERMES")
+regression_plot(dfJ, "cout_fid_A",   "delta_tickets", "FID (SMS) A (€)",   "ΔTickets (A - B)","ΔTickets ~ FID (SMS)")
+regression_plot(dfJ, "cout_ermes_A", "delta_tickets", "ERMES A (€)",       "ΔTickets (A - B)","ΔTickets ~ ERMES")
 st.divider()
 
-# ---------------------- DÉTAIL PAR MAGASIN (EN DERNIER) ---------------
-st.subheader("🧾 Détail par magasin (après filtres)")
-# Assure colonnes meteo en cas d'absence
+# ---------------------- DÉTAIL PAR MAGASIN (A vs B) -------------------
+st.subheader("🧾 Détail par magasin (A vs B – filtres appliqués)")
 for c in ["meteo_A","meteo_B"]:
     if c not in dfJ.columns:
         dfJ[c] = "—"
@@ -752,18 +807,17 @@ st.dataframe(
 st.download_button(
     "📥 Export comparatif magasins (CSV)",
     data=dfJ[display_cols].to_csv(index=False, sep=";", encoding="utf-8"),
-    file_name=f"comparatif_{opA_label}_vs_{opB_label}.csv",
+    file_name=f"comparatif_{opA_label}_vs_{opB_label}_A_vs_B.csv",
     mime="text/csv"
 )
 
 st.divider()
 
-# ---------------------- GPT ASSISTANT (corrigé et fonctionnel) ---------------------
+# ---------------------- GPT ASSISTANT (A vs B) ---------------------
 st.subheader("🧠 Assistant d’analyse GPT")
-st.caption("Astuce : « Pourquoi la région X baisse par rapport à l’an dernier ? », "
-           "« Quels magasins sous-investis ERMES ont du potentiel ? »")
+st.caption("Astuce : « Pourquoi la région X progresse par rapport à l’an dernier ? », "
+           "« Quels magasins A ont mieux performé que B ? »")
 
-# Zone de saisie + bouton
 user_q = st.text_area(
     "Ta question",
     value=st.session_state.get("last_question", ""),
@@ -783,17 +837,16 @@ def build_compact_context():
     mags = dfJ.copy()
     mags["abs_delta_ca"] = mags["delta_ca"].abs()
     mags_small = mags.sort_values("abs_delta_ca", ascending=False).head(100)
-    keep_cols = [
-        "code_magasin","ca_A","ca_B","pct_ca","tickets_A","tickets_B","pct_tickets",
-        "pm_A","pm_B","pct_pm","cout_fid_A","cout_fid_B","cout_ermes_A","cout_ermes_B",
-        "quantite_totale_achete_A","quantite_totale_achete_B","meteo_A","meteo_B"
-    ]
+    keep_cols = ["code_magasin","ca_A","ca_B","pct_ca","tickets_A","tickets_B","pct_tickets",
+                 "pm_A","pm_B","pct_pm","cout_fid_A","cout_fid_B","cout_ermes_A","cout_ermes_B",
+                 "quantite_totale_achete_A","quantite_totale_achete_B","meteo_A","meteo_B"]
     return {
         "operation_A": opA_label, "operation_B": opB_label,
         "kpis": kpis,
         "regions": df_region.to_dict(orient="records"),
         "magasins": mags_small[keep_cols].to_dict(orient="records")
     }
+
 
 # ---- Interaction GPT ----
 if ask and user_q.strip():
@@ -809,7 +862,7 @@ if ask and user_q.strip():
             sys = (
                 "Tu es un analyste retail. Réponds en français, de manière concise et structurée "
                 "en te basant uniquement sur les données (CA, Tickets, Achats, Météo, ERMES/FID, régions, magasins). "
-                "Explique les écarts (ΔCA) en reliant Achats, Marketing, et Météo."
+                "Explique les écarts (ΔCA = A - B) en reliant Achats, Marketing, et Météo."
             )
             prompt = f"Contexte JSON (compact): {json.dumps(context, ensure_ascii=False)[:60000]}\n\nQuestion: {user_q}"
 
@@ -823,11 +876,9 @@ if ask and user_q.strip():
                     temperature=0.25,
                 )
             st.session_state["gpt_response"] = resp.choices[0].message.content.strip()
-
     except Exception as e:
         st.session_state["gpt_response"] = f"[GPT] Erreur : {e}"
 
-# ---- Affichage du résultat conservé ----
 if "gpt_response" in st.session_state and st.session_state["gpt_response"]:
     st.markdown("### 🧾 Réponse de GPT :")
     st.success(st.session_state["gpt_response"])
