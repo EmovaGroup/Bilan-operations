@@ -35,14 +35,15 @@ h1, h2, h3 {{ color: {PRIMARY}; }}
 /* Cartes KPI encadrées rouge (uniformes) */
 .kpi-card {{
   border: 3px solid {ACCENT}; border-radius: 14px; padding: 14px;
-  background: #fff; text-align: center; min-height: 170px;
+  background: #fff; text-align: center; min-height: 180px;
   display: flex; flex-direction: column; justify-content: space-between;
+  margin-bottom: 15px; /* ✅ espace entre les lignes */
 }}
 .kpi-title {{ font-size: 15px; font-weight: 800; color: {ACCENT}; margin-bottom: 4px; }}
 .kpi-period {{ font-size: 12px; color: #333; margin-bottom: 8px; }}
-.kpi-val    {{ font-size: 22px; font-weight: 800; color: #000; }}
-.kpi-arrow  {{ font-size: 18px; color: #666; margin: 4px 0; }}
-.kpi-sub    {{ font-size: 18px; color: {ACCENT}; font-weight: 900; margin-top: 2px; }}
+.kpi-val {{ font-size: 22px; font-weight: 800; color: #000; }}
+.kpi-vs {{ font-size: 16px; color: #444; margin: 4px 0; font-weight: 700; }} /* ✅ “VS” centré */
+.kpi-sub {{ font-size: 18px; color: {ACCENT}; font-weight: 900; margin-top: 6px; }}
 
 /* Boutons */
 div.stButton > button, div.stDownloadButton > button {{
@@ -87,9 +88,9 @@ def query(sql: str, params=None) -> pd.DataFrame:
 
 # ---------------------------- CONSTANTES ------------------------------
 OPS = {
-    "Anniversaire 2024 semaine 41": (pd.Timestamp("2024-10-09"), pd.Timestamp("2024-10-13")),
-    "Anniversaire 2025 semaine 40": (pd.Timestamp("2025-10-01"), pd.Timestamp("2025-10-05")),
-    "Semaine 40 2024": (pd.Timestamp("2024-10-02"), pd.Timestamp("2024-10-06")),
+    "Anniversaire 2024": (pd.Timestamp("2024-10-09"), pd.Timestamp("2024-10-13")),
+    "Anniversaire 2025": (pd.Timestamp("2025-10-01"), pd.Timestamp("2025-10-05")),
+    "Roch Hachana 2024": (pd.Timestamp("2024-10-02"), pd.Timestamp("2024-10-06")),
 }
 BANNED_RAYONS = {"evenements de la vie", "transmission florale"}   # normalisés
 COUT_FIXE_RATE = 0.40
@@ -392,45 +393,68 @@ with st.spinner("Chargement des données, calculs & météo..."):
 
     @st.cache_data(ttl=3600, show_spinner=False)
     def fetch_weather_codes(lat, lon, start_date: pd.Timestamp, days: int = 5, tz: str = "Europe/Paris"):
+        """
+        Récupère les codes météo J1→J5 via Open-Meteo :
+        - utilise /forecast pour les dates futures
+        - utilise /archive pour les dates passées
+        """
         if pd.isna(lat) or pd.isna(lon):
             return []
-        end_date = (start_date + pd.Timedelta(days=days-1)).date().isoformat()
+
         start_str = start_date.date().isoformat()
+        end_date = (start_date + pd.Timedelta(days=days - 1)).date().isoformat()
+
+        # ✅ Basculer sur archive si date passée
+        api_root = "archive-api.open-meteo.com/v1/archive" if start_date.date() < datetime.now().date() else "api.open-meteo.com/v1/forecast"
+
         url = (
-            "https://api.open-meteo.com/v1/forecast"
+            f"https://{api_root}"
             f"?latitude={lat}&longitude={lon}"
-            f"&daily=weathercode&timezone={tz}"
+            f"&daily=weathercode,temperature_2m_max,temperature_2m_min,precipitation_sum"
             f"&start_date={start_str}&end_date={end_date}"
+            f"&timezone={tz}"
         )
+
         try:
             r = requests.get(url, timeout=10)
-            if r.status_code != 200:
-                return []
-            data = r.json()
-            codes = data.get("daily", {}).get("weathercode", [])
+            r.raise_for_status()
+            data = r.json().get("daily", {})
+            codes = data.get("weathercode", [])
             return list(codes)[:5]
         except Exception:
             return []
 
-    def add_weather_for_operation(df_metrics: pd.DataFrame, start: pd.Timestamp, op_tag: str) -> pd.DataFrame:
-        if df_metrics.empty:
-            df_metrics[f"meteo_{op_tag}"] = ""
-            return df_metrics
-        m = df_metrics[["code_magasin"]].merge(df_geo, on="code_magasin", how="left")
-        metas = []
-        for _, row in m.iterrows():
-            code = row["code_magasin"]
-            lat = row.get("latitude", np.nan)
-            lon = row.get("longitude", np.nan)
-            codes = fetch_weather_codes(lat, lon, start, days=5, tz="Europe/Paris")
-            metas.append({"code_magasin": code, f"meteo_{op_tag}": codes_to_emoji_seq(codes)})
-        df_meteo = pd.DataFrame(metas)
-        out = df_metrics.merge(df_meteo, on="code_magasin", how="left")
-        out[f"meteo_{op_tag}"] = out[f"meteo_{op_tag}"].fillna("—")
-        return out
+def add_weather_for_operation(df_metrics: pd.DataFrame, start: pd.Timestamp, op_tag: str) -> pd.DataFrame:
+    """Ajoute la météo J1→J5 à chaque magasin (avec gestion cache et fallback)."""
+    if df_metrics.empty:
+        df_metrics[f"meteo_{op_tag}"] = "—"
+        return df_metrics
 
-    dfA = add_weather_for_operation(dfA, a_start, "A")
-    dfB = add_weather_for_operation(dfB, b_start, "B")
+    m = df_metrics[["code_magasin"]].merge(df_geo, on="code_magasin", how="left")
+    metas = []
+    for _, row in m.iterrows():
+        code = row["code_magasin"]
+        lat, lon = row.get("latitude", np.nan), row.get("longitude", np.nan)
+        if pd.notna(lat) and pd.notna(lon):
+            codes = fetch_weather_codes(lat, lon, start, days=5, tz="Europe/Paris")
+            if not codes:
+                # ⚠️ retry direct si vide
+                codes = fetch_weather_codes(lat, lon, start, days=5, tz="Europe/Paris")
+            emoji_seq = codes_to_emoji_seq(codes)
+        else:
+            emoji_seq = "—"
+        metas.append({"code_magasin": code, f"meteo_{op_tag}": emoji_seq})
+
+    df_meteo = pd.DataFrame(metas)
+    out = df_metrics.merge(df_meteo, on="code_magasin", how="left")
+    out[f"meteo_{op_tag}"] = out[f"meteo_{op_tag}"].replace("", "—")
+    return out
+
+dfA = add_weather_for_operation(dfA, a_start, "A")
+dfB = add_weather_for_operation(dfB, b_start, "B")
+
+# 👇 seulement après, tu fais le merge comparatif
+dfJ = dfA.merge(dfB, on="code_magasin", suffixes=("_A", "_B"))
 
 # ---------------------------- KPI GLOBALS -----------------------------
 # NB: on affiche après le spinner pour éviter écran blanc
@@ -443,7 +467,7 @@ def kpi_card(title, period, valA, valB, pct_text):
         <div class='kpi-title'>{title}</div>
         <div class='kpi-period'>{period}</div>
         <div class='kpi-val'>{valA}</div>
-        <div class='kpi-arrow'>⬇️</div>
+        <div class='kpi-vs'>VS</div>
         <div class='kpi-val'>{valB}</div>
       </div>
       <div class='kpi-sub'>{pct_text}</div>
@@ -559,20 +583,51 @@ df_region["variation_CA"] = np.where(df_region["ca_A"]>0,
 geojson = load_france_regions_geojson()
 
 def plot_regions_plotly(df_region, geojson):
-    q5, q95 = np.nanpercentile(df_region["variation_CA"].dropna(), [5,95]) if df_region["variation_CA"].notna().sum()>=2 else (-30,30)
+    # Définition des bornes dynamiques de couleur (5e–95e percentile)
+    if df_region["variation_CA"].notna().sum() >= 2:
+        q5, q95 = np.nanpercentile(df_region["variation_CA"].dropna(), [5, 95])
+    else:
+        q5, q95 = -30, 30
+
+    # Création de la carte choroplèthe
     fig = px.choropleth(
         df_region,
         geojson=geojson,
         featureidkey="properties.nom",
         locations="region_admin",
         color="variation_CA",
-        color_continuous_scale=["#d73027","#fdae61","#ffffbf","#a6d96a","#1a9850"],
+        color_continuous_scale=["#d73027", "#fdae61", "#ffffbf", "#a6d96a", "#1a9850"],
         range_color=[q5, q95],
-        hover_data={"ca_A":":,.0f","ca_B":":,.0f","variation_CA":":.1f"},
-        labels={"variation_CA":"Δ CA (%)","ca_A":"CA A (€)","ca_B":"CA B (€)"},
+        hover_data={"ca_A": True, "ca_B": True, "variation_CA": True},
+        labels={
+            "variation_CA": "Δ CA (%)",
+            "ca_A": "CA A (€)",
+            "ca_B": "CA B (€)"
+        },
     )
+
+    # ✅ Tooltip personnalisé avec fond gris clair
+    fig.update_traces(
+        hovertemplate=(
+            "<div style='background-color:#f5f5f5; padding:8px 10px; border-radius:8px; "
+            "border:1px solid #ddd; color:#111; font-size:13px;'>"
+            "<b>%{location}</b><br>"
+            "CA A = %{customdata[0]:,.0f} €<br>"
+            "CA B = %{customdata[1]:,.0f} €<br>"
+            "Variation = %{customdata[2]:+.1f} %"
+            "</div><extra></extra>"
+        )
+    )
+
+    # Ajustements esthétiques généraux
     fig.update_geos(fitbounds="locations", visible=False)
-    fig.update_layout(height=520, margin={"r":0,"t":0,"l":0,"b":0})
+    fig.update_layout(
+        height=520,
+        margin={"r": 0, "t": 0, "l": 0, "b": 0},
+        paper_bgcolor="white",
+        plot_bgcolor="white"
+    )
+
     return fig
 
 fig_map_regions = plot_regions_plotly(df_region, geojson)
