@@ -1,0 +1,6 @@
+# Fichiers à ne jamais push
+.env
+__pycache__/
+*.pyc
+data/
+*.db
