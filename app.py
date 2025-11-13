@@ -21,6 +21,111 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import psycopg2
 import requests
+from supabase import create_client, Client
+
+load_dotenv()
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
+
+if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+    st.error("⚠️ SUPABASE_URL et SUPABASE_ANON_KEY doivent être définis dans .env")
+    st.stop()
+
+@st.cache_resource
+def get_supabase() -> Client:
+    return create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+
+supabase = get_supabase()
+
+# Emails autorisés
+ALLOWED = {
+    "sa.ouni@emova-group.com",
+    "o.ginoux@emova-group.com",
+    "d.decarriere@emova-group.com",
+    "n.dubois@emova-group.com",
+    "s.maslaga@emova-group.com",
+    "dsi@emova-group.com",
+    "ym.gille@emova-group.com",
+    "m.arnaud@emova-group.com",
+    "r.guerin@emova-group.com",
+    "c.rivals@emova-group.com",
+    "a.laaroussi@emova-group.com",
+    "l.hagard@emova-group.com",
+    "s.talobre@emova-group.com",
+    "a.billat@emova-group.com",
+    "t.vernageau@emova-group.com",
+    "l.pasco@emova-group.com",
+    "y.elogri@emova-group.com",
+}
+
+# Gestion de la session utilisateur
+if "auth" not in st.session_state:
+    st.session_state["auth"] = {"user": None, "session": None}
+
+# --- Si pas connecté → afficher uniquement le formulaire de login ---
+if st.session_state["auth"]["user"] is None:
+
+    st.set_page_config(page_title="Bilan OP – Connexion", layout="centered")
+
+    st.title("🔐 Connexion sécurisée")
+    email = st.text_input("Email")
+    password = st.text_input("Mot de passe", type="password")
+
+    if st.button("Se connecter"):
+        try:
+            auth_res = supabase.auth.sign_in_with_password(
+                {"email": email, "password": password}
+            )
+            user = auth_res.user
+
+            if user and user.email in ALLOWED:
+                st.session_state["auth"]["user"] = user
+                st.session_state["auth"]["session"] = auth_res.session
+                st.rerun()
+            else:
+                st.error("🚫 Vous n'avez pas accès à ce dashboard.")
+        except Exception as e:
+            st.error(f"❌ Identifiants invalides : {e}")
+
+    st.stop()
+
+# --- Si connecté → affichage normal ---
+user = st.session_state["auth"]["user"]
+st.sidebar.success(f"Connecté : {user.email}")
+
+if st.sidebar.button("Se déconnecter"):
+    st.session_state["auth"] = {"user": None, "session": None}
+    st.rerun()
+
+# ---------- Message de bienvenue personnalisé ----------
+USER_NAMES = {
+    "sa.ouni@emova-group.com": "Salah Ouni",
+    "o.ginoux@emova-group.com": "Olivier Ginoux",
+    "d.decarriere@emova-group.com": "David Decarrière",
+    "dsi@emova-group.com": "DSI",
+    "n.dubois@emova-group.com": "Nicolas Dubois",
+    "s.maslaga@emova-group.com": "Saloua Maslaga",
+    "ym.gille@emova-group.com": "Yves-Marie Gille",
+    "m.arnaud@emova-group.com": "Morgane Arnaud",
+    "r.guerin@emova-group.com": "Romain Guerin",
+    "c.rivals@emova-group.com": "Celine Rivals",
+    "a.laaroussi@emova-group.com": "Alae Laaroussi",
+    "l.hagard@emova-group.com": "Lauriane Hagard",
+    "s.talobre@emova-group.com": "Sana Talobre",
+    "a.billat@emova-group.com": "Aude Billat",
+    "t.vernageau@emova-group.com": "Thierry Vernageau",
+    "l.pasco@emova-group.com": "Laetitia Pasco",
+    "y.elogri@emova-group.com": "Yasmine El ogri"
+}
+
+email = user.email.lower()
+display_name = USER_NAMES.get(email, email)
+
+st.markdown(
+    f"<h2 style='color:#1a73e8;'>👋 Bienvenue {display_name} !</h2>",
+    unsafe_allow_html=True
+)
 
 # ---------------------------- CONFIG UI -------------------------------
 st.set_page_config(page_title="Bilan OP – Comparateur", layout="wide")
@@ -88,9 +193,9 @@ def query(sql: str, params=None) -> pd.DataFrame:
 
 # ---------------------------- CONSTANTES ------------------------------
 OPS = {
-    "Anniversaire 2025 semaine 40": (pd.Timestamp("2025-10-01"), pd.Timestamp("2025-10-05")),
-    "Anniversaire 2024 semaine 41": (pd.Timestamp("2024-10-09"), pd.Timestamp("2024-10-13")),
-    "Semaine 40 2024": (pd.Timestamp("2024-10-02"), pd.Timestamp("2024-10-06")),
+    "Anniversaire 2024": (pd.Timestamp("2024-10-09"), pd.Timestamp("2024-10-13")),
+    "Anniversaire 2025": (pd.Timestamp("2025-10-01"), pd.Timestamp("2025-10-05")),
+    "Roch Hachana 2024": (pd.Timestamp("2024-10-02"), pd.Timestamp("2024-10-06")),
 }
 BANNED_RAYONS = {"evenements de la vie", "transmission florale"}   # normalisés
 COUT_FIXE_RATE = 0.40
@@ -896,6 +1001,186 @@ regression_plot(dfJ, "cout_fid_A",   "delta_pm",      "FID (SMS) A (€)",   "Δ
 regression_plot(dfJ, "cout_ermes_A", "delta_pm",      "ERMES A (€)",       "ΔPM (A - B) €",   "ΔPM ~ ERMES")
 regression_plot(dfJ, "cout_fid_A",   "delta_tickets", "FID (SMS) A (€)",   "ΔTickets (A - B)","ΔTickets ~ FID (SMS)")
 regression_plot(dfJ, "cout_ermes_A", "delta_tickets", "ERMES A (€)",       "ΔTickets (A - B)","ΔTickets ~ ERMES")
+st.divider()
+
+# ---------------------- MÉTÉO ↔ PERFORMANCE ---------------------------
+st.markdown("""
+### 🌦️ Comment la météo est notée ?
+Chaque séquence météo J1→J5 est convertie en **score météorologique**, permettant d’évaluer l’impact potentiel sur le CA.
+
+| Emoji | Signification               | Score |
+|-------|------------------------------|-------|
+| ☀️   | Soleil fort                   | +3 |
+| 🌤️   | Soleil léger                  | +2 |
+| ⛅   | Partiellement couvert         | +1 |
+| ☁️   | Nuageux                       | 0 |
+| 🌫️   | Brouillard                    | -1 |
+| 🌧️ / 🌦️ | Pluie                     | -1 |
+| ⛈️ / 🌩️ | Orage                      | -2 |
+| ❄️   | Neige                         | -3 |
+
+**Δ météo = Score A − Score B**  
+→ Positif = A a eu une météo meilleure  
+→ Négatif = B a eu une météo plus favorable  
+""")
+
+st.subheader("🌦️ Corrélation Météo ↔ Performance (ΔCA A vs B)")
+
+# --- Nouveau dictionnaire officiel ---
+WEATHER_SCORE = {
+    "☀️": 3,
+    "🌤️": 2,
+    "⛅": 1,
+    "☁️": 0,
+    "🌫️": -1,
+    "🌧️": -1, "🌦️": -1,
+    "⛈️": -2, "🌩️": -2,
+    "❄️": -3
+}
+
+def meteo_to_score(seq: str) -> int:
+    """
+    Transforme la séquence '☀️ 🌤️ 🌧️ ...' en score total.
+    """
+    if not isinstance(seq, str) or seq.strip() == "—":
+        return 0
+    total = 0
+    for emoji in seq.split():
+        total += WEATHER_SCORE.get(emoji, 0)
+    return total
+
+# --- Application des scores météo ---
+dfJ["meteo_score_A"] = dfJ["meteo_A"].apply(meteo_to_score)
+dfJ["meteo_score_B"] = dfJ["meteo_B"].apply(meteo_to_score)
+dfJ["meteo_delta"] = dfJ["meteo_score_A"] - dfJ["meteo_score_B"]
+
+# --- Corrélation météo ↔ variation de CA ---
+if dfJ["pct_ca"].notna().sum() > 2:
+    corr = dfJ["pct_ca"].corr(dfJ["meteo_delta"])
+    st.metric(
+        "Corrélation météo ↔ Variation CA",
+        f"{corr:+.2f}",
+        help="Corrélation de Pearson entre variation météo (A - B) et ΔCA (%)"
+    )
+
+    # --- Scatter : Δ météo vs Δ CA ---
+    fig_corr = px.scatter(
+        dfJ,
+        x="meteo_delta",
+        y="pct_ca",
+        color="pct_ca",
+        color_continuous_scale=["#d73027","#fdae61","#ffffbf","#a6d96a","#1a9850"],
+        hover_name="code_magasin",
+        title="Impact météo : ΔCA (%) en fonction de la variation météo (A - B)"
+    )
+
+    fig_corr.update_layout(
+        height=420,
+        xaxis_title="Δ Score météo (A - B)",
+        yaxis_title="Δ CA (%)",
+        paper_bgcolor="rgba(240,245,250,0.9)",
+        plot_bgcolor="rgba(235,240,245,0.9)"
+    )
+
+    st.plotly_chart(fig_corr, use_container_width=True)
+
+else:
+    st.info("Pas assez de données météo pour établir une corrélation fiable.")
+
+st.divider()
+
+# ======================================================================
+#               🚀 DIAGNOSTIC MÉTÉO ↔ PERFORMANCE (A vs B)
+# ======================================================================
+
+st.subheader("🌦️🔥 Diagnostic météo ↔ performance magasin par magasin")
+
+# --- Dictionnaire officiel des scores météo (TA TABLE EXACTE) ---
+METEO_SCORES = {
+    "☀️": 3,
+    "🌤️": 2,
+    "⛅": 1,
+    "☁️": 0,
+    "🌫️": -1,
+    "🌧️": -1, "🌦️": -1,
+    "⛈️": -2, "🌩️": -2,
+    "❄️": -3
+}
+
+def meteo_to_score_full(seq: str) -> int:
+    """Convertit une séquence météo J1→J5 en score global."""
+    if not isinstance(seq, str) or seq.strip() in ["—", ""]:
+        return 0
+    score = 0
+    for emoji, val in METEO_SCORES.items():
+        score += seq.count(emoji) * val
+    return score
+
+# --- Application des scores météo (A et B) ---
+dfJ["meteo_score_A"] = dfJ["meteo_A"].apply(meteo_to_score_full)
+dfJ["meteo_score_B"] = dfJ["meteo_B"].apply(meteo_to_score_full)
+dfJ["meteo_delta"]   = dfJ["meteo_score_A"] - dfJ["meteo_score_B"]
+
+# --------------------- Diagnostic magasin par magasin ---------------------
+def diagnostic_meteo_vs_ca(row):
+    met = row["meteo_delta"]
+    ca  = row["pct_ca"]
+
+    if pd.isna(met) or pd.isna(ca):
+        return "Données insuffisantes"
+
+    # ⚡ Cas 1 : météo meilleure mais CA baisse → problème NON météo
+    if met > 0 and ca < 0:
+        return "❌ CA en baisse malgré météo meilleure → problème NON météo"
+
+    # ⚡ Cas 2 : météo meilleure ET CA augmente → cohérent
+    if met > 0 and ca > 0:
+        return "✔ CA cohérent (météo favorable)"
+
+    # ⚡ Cas 3 : météo pire ET CA baisse → météo explicative
+    if met < 0 and ca < 0:
+        return "🌧 Baisse expliquée par météo"
+
+    # ⚡ Cas 4 : météo pire mais CA augmente → très bonne perf
+    if met < 0 and ca > 0:
+        return "⭐ Excellente performance malgré météo défavorable"
+
+    # Météo égale → dépend d'autres facteurs
+    return "ℹ️ Météo similaire → variation due à autre facteur"
+
+dfJ["diagnostic_meteo_ca"] = dfJ.apply(diagnostic_meteo_vs_ca, axis=1)
+
+
+# --------------------- Tableau Diagnostic ---------------------
+diag_cols = [
+    "code_magasin",
+    "meteo_A", "meteo_B",
+    "meteo_score_A", "meteo_score_B", "meteo_delta",
+    "ca_A", "ca_B", "pct_ca",
+    "diagnostic_meteo_ca"
+]
+
+st.dataframe(
+    dfJ[diag_cols].sort_values("pct_ca", ascending=False),
+    use_container_width=True
+)
+
+
+# --------------------- Synthèse globale ---------------------
+nb_non_meteo = dfJ["diagnostic_meteo_ca"].str.contains("problème NON météo", na=False).sum()
+nb_meteo_explique = dfJ["diagnostic_meteo_ca"].str.contains("expliquée par météo", na=False).sum()
+nb_perf_malgre = dfJ["diagnostic_meteo_ca"].str.contains("malgré météo défavorable", na=False).sum()
+
+st.markdown(f"""
+### 🧠 Synthèse automatique
+- ❌ **{nb_non_meteo} magasins** : CA en baisse **non expliqué par météo**
+- 🌧 **{nb_meteo_explique} magasins** : baisse **expliquée par météo**
+- ⭐ **{nb_perf_malgre} magasins** : performance **malgré météo défavorable**
+
+👉 Cette synthèse te permet immédiatement de savoir  
+**si les problèmes de performances sont dus à la météo ou non**.
+""")
+
 st.divider()
 
 # ---------------------- TOP & FLOP MAGASINS (sans matplotlib) ---------
