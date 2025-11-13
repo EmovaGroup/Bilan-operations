@@ -88,9 +88,9 @@ def query(sql: str, params=None) -> pd.DataFrame:
 
 # ---------------------------- CONSTANTES ------------------------------
 OPS = {
-    "Anniversaire 2025 semaine 40": (pd.Timestamp("2025-10-01"), pd.Timestamp("2025-10-05")),
-    "Anniversaire 2024 semaine 41": (pd.Timestamp("2024-10-09"), pd.Timestamp("2024-10-13")),
-    "Semaine 40 2024": (pd.Timestamp("2024-10-02"), pd.Timestamp("2024-10-06")),
+    "Anniversaire 2024": (pd.Timestamp("2024-10-09"), pd.Timestamp("2024-10-13")),
+    "Anniversaire 2025": (pd.Timestamp("2025-10-01"), pd.Timestamp("2025-10-05")),
+    "Roch Hachana 2024": (pd.Timestamp("2024-10-02"), pd.Timestamp("2024-10-06")),
 }
 BANNED_RAYONS = {"evenements de la vie", "transmission florale"}   # normalisés
 COUT_FIXE_RATE = 0.40
@@ -137,6 +137,7 @@ with st.form("filters_form", clear_on_submit=False):
         st.stop()
 
     def block_filters(prefix: str, df_mag: pd.DataFrame):
+        # Listes de sélection
         stores = ["Tous"] + sorted(df_mag["code_magasin"].dropna().astype(str).unique().tolist())
         types  = ["Tous"] + sorted([x for x in df_mag["type"].dropna().unique()])
         regs   = ["Tous"] + sorted([x for x in df_mag["region_admin"].dropna().unique()])
@@ -145,33 +146,66 @@ with st.form("filters_form", clear_on_submit=False):
         rcrs   = ["Tous"] + sorted([x for x in df_mag["rcr"].dropna().unique()])
 
         c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            sel_stores = st.multiselect(f"🏬 Magasins ({prefix})", stores, default=["Tous"])
-            sel_type   = st.selectbox(f"Type ({prefix})", types, index=0)
-        with c2:
-            sel_region  = st.selectbox(f"Région (admin) ({prefix})", regs, index=0)
-            sel_regionE = st.selectbox(f"Région élargie ({prefix})", regE, index=0)
-        with c3:
-            sel_seg = st.selectbox(f"Segmentation ({prefix})", segs, index=0)
-            sel_rcr = st.selectbox(f"RCR ({prefix})", rcrs, index=0)
-        with c4:
-            sel_comp = st.selectbox(f"Comparable ? ({prefix})", ["Tous", "Oui", "Non"], index=0)
-            sel_part = st.selectbox(f"Participe OP ? ({prefix})", ["Tous", "Oui", "Non"], index=0)
 
-        c5, c6 = st.columns(2)
-        with c5:
+        # ------------------ Bloc 1 ------------------
+        with c1:
+            sel_stores = st.multiselect(
+                f"🏬 Magasins ({prefix})", stores, default=["Tous"]
+            )
+            sel_type = st.selectbox(
+                f"Type magasin ({prefix})", types, index=0
+            )
+            sel_seg = st.selectbox(
+                f"Segmentation ({prefix})", segs, index=0
+            )
+
+        # ------------------ Bloc 2 ------------------
+        with c2:
+            sel_region = st.selectbox(
+                f"Région admin ({prefix})", regs, index=0
+            )
+            sel_regionE = st.selectbox(
+                f"Région élargie ({prefix})", regE, index=0
+            )
+            sel_rcr = st.selectbox(
+                f"RCR ({prefix})", rcrs, index=0
+            )
+
+        # ------------------ Bloc 3 ------------------
+        with c3:
+            sel_comp = st.selectbox(
+                f"Magasin comparable ? ({prefix})",
+                ["Tous", "Oui", "Non"], index=0
+            )
             sel_rosha = st.selectbox(
                 f"Roch Hachana ({prefix})",
-                ["Tous", "Oui", "Non"], index=0,
-                help="Filtre sur magasin.roch_hachana (Oui/Non)"
+                ["Tous", "Oui", "Non"], index=0
             )
-        with c6:
-            sel_part_com = st.selectbox(
-                f"Participe communication ({prefix})",
-                ["Tous", "Oui", "Non"], index=0,
-                help="Basé sur ERMES > 0 sur la fenêtre de l'opération"
+            sel_rupture = st.selectbox(
+                f"Rupture stock ? ({prefix})",
+                ["Tous", "Oui", "Non"], index=0
+            )
+            
+        # ------------------ Bloc 4 ------------------
+        with c4:
+            
+            # ❗ Nouveau : 3 filtres participation
+            sel_part_op = st.selectbox(
+                f"Participe à l’opération ({prefix})",
+                ["Tous", "Oui", "Non"], index=0
             )
 
+            sel_part_fid = st.selectbox(
+                f"Participe FID (SMS) ({prefix})",
+                ["Tous", "Oui", "Non"], index=0
+            )
+
+            sel_part_ermes = st.selectbox(
+                f"Participe ERMES ({prefix})",
+                ["Tous", "Oui", "Non"], index=0
+            )
+
+        # Retour des paramètres
         return {
             "sel_stores": sel_stores,
             "sel_type": sel_type,
@@ -180,10 +214,12 @@ with st.form("filters_form", clear_on_submit=False):
             "sel_seg": sel_seg,
             "sel_rcr": sel_rcr,
             "sel_comp": sel_comp,
-            "sel_part": sel_part,
+            "sel_part_op": sel_part_op,
+            "sel_part_fid": sel_part_fid,
+            "sel_part_ermes": sel_part_ermes,
             "sel_rosha": sel_rosha,
-            "sel_part_com": sel_part_com,
-        }
+            "sel_rupture": sel_rupture,
+    }
 
     with st.expander("🅰️ Filtres Opération A", expanded=True):
         filters_A = block_filters("A", df_mag)
@@ -219,6 +255,7 @@ with st.spinner("Chargement des données, calculs & météo..."):
     def filter_mag(df_in: pd.DataFrame, df_mag_: pd.DataFrame, F: dict) -> pd.DataFrame:
         if df_in.empty:
             return df_in.copy()
+
         base = df_in.merge(df_mag_, on="code_magasin", how="left")
 
         if "Tous" not in F["sel_stores"]:
@@ -235,13 +272,15 @@ with st.spinner("Chargement des données, calculs & météo..."):
             base = base[base["rcr"] == F["sel_rcr"]]
         if F["sel_comp"] != "Tous":
             base = base[base["comparable"] == (F["sel_comp"] == "Oui")]
-        if F["sel_part"] != "Tous":
-            base = base[base["participe_op_bool"] == (F["sel_part"] == "Oui")]
+
         if "roch_hachana" in base.columns and F["sel_rosha"] != "Tous":
             base = base[base["roch_hachana"] == (F["sel_rosha"] == "Oui")]
 
+        # ⚠️ IMPORTANT : pas de filtres FID / ERMES / rupture ici !
+
         cols_keep = [c for c in df_in.columns] + [
-            "type","region_admin","region_elargie","segmentation","rcr","comparable","participe_op_bool","roch_hachana"
+            "type","region_admin","region_elargie","segmentation",
+            "rcr","comparable","participe_op_bool","roch_hachana"
         ]
         cols_keep = list(dict.fromkeys([c for c in cols_keep if c in base.columns]))
         return base[cols_keep]
@@ -323,6 +362,40 @@ with st.spinner("Chargement des données, calculs & météo..."):
         return ach
 
     df_achat = load_achats()
+    # ---------------------------- RUPTURES -----------------------------
+    @st.cache_data(ttl=180)
+    def load_ruptures():
+        df = query("""
+            SELECT code_magasin, rupture_date, rupture
+            FROM public.rupture
+            WHERE rupture = true
+        """)
+        if df.empty:
+            return df
+        df["rupture_date"] = pd.to_datetime(df["rupture_date"], errors="coerce")
+        return df
+
+    df_rup = load_ruptures()
+
+    def compute_rupture_flags(df_rup, start, end):
+        """Retourne un DF par magasin avec : rupture présente ? + nombre de jours."""
+        if df_rup.empty:
+            return pd.DataFrame(columns=["code_magasin", "a_rupture", "jours_rupture"])
+
+        d = df_rup[
+            (df_rup["rupture_date"] >= start)
+            & (df_rup["rupture_date"] <= end)
+        ]
+
+        if d.empty:
+            return pd.DataFrame(columns=["code_magasin", "a_rupture", "jours_rupture"])
+
+        g = d.groupby("code_magasin").agg(
+            a_rupture=("rupture", "max"),
+            jours_rupture=("rupture_date", "count")
+        ).reset_index()
+
+        return g
 
     # ---------------------------- METRICS BUILD -----------------------
     def compute_metrics(df_ticket: pd.DataFrame, start, end, year) -> pd.DataFrame:
@@ -350,18 +423,60 @@ with st.spinner("Chargement des données, calculs & météo..."):
     dfA = compute_metrics(dfA_ticket, a_start, a_end, a_start.year)
     dfB = compute_metrics(dfB_ticket, b_start, b_end, b_start.year)
 
-    # Participation com (ERMES>0)
-    def apply_participation_comm(df_metrics: pd.DataFrame, F: dict) -> pd.DataFrame:
+    # Ajout rupture pour A
+    rupA = compute_rupture_flags(df_rup, a_start, a_end)
+    dfA = dfA.merge(rupA, on="code_magasin", how="left")
+    dfA["a_rupture"] = dfA["a_rupture"].fillna(False)
+    dfA["jours_rupture"] = dfA["jours_rupture"].fillna(0)
+    dfA.rename(columns={
+        "a_rupture": "rupture_A",
+        "jours_rupture": "jours_rupture_A"
+    }, inplace=True)
+
+    # Ajout rupture pour B
+    rupB = compute_rupture_flags(df_rup, b_start, b_end)
+    dfB = dfB.merge(rupB, on="code_magasin", how="left")
+    dfB["a_rupture"] = dfB["a_rupture"].fillna(False)
+    dfB["jours_rupture"] = dfB["jours_rupture"].fillna(0)
+    dfB.rename(columns={
+        "a_rupture": "rupture_B",
+        "jours_rupture": "jours_rupture_B"
+    }, inplace=True)
+
+    def apply_participation_fid(df_metrics: pd.DataFrame, F: dict) -> pd.DataFrame:
         if df_metrics.empty:
             return df_metrics
-        if F["sel_part_com"] == "Oui":
-            return df_metrics[df_metrics["cout_ermes"] > 0]
-        if F["sel_part_com"] == "Non":
-            return df_metrics[df_metrics["cout_ermes"] <= 0]
+        if F["sel_part_fid"] == "Oui":
+            return df_metrics[df_metrics["cout_fid"] > 0]
+        if F["sel_part_fid"] == "Non":
+            return df_metrics[df_metrics["cout_fid"] == 0]
         return df_metrics
 
-    dfA = apply_participation_comm(dfA, filters_A)
-    dfB = apply_participation_comm(dfB, filters_B)
+    dfA = apply_participation_fid(dfA, filters_A)
+    dfB = apply_participation_fid(dfB, filters_B)
+
+    def apply_participation_ermes(df_metrics: pd.DataFrame, F: dict) -> pd.DataFrame:
+        if df_metrics.empty:
+            return df_metrics
+        if F["sel_part_ermes"] == "Oui":
+            return df_metrics[df_metrics["cout_ermes"] > 0]
+        if F["sel_part_ermes"] == "Non":
+            return df_metrics[df_metrics["cout_ermes"] == 0]
+        return df_metrics
+
+    dfA = apply_participation_ermes(dfA, filters_A)
+    dfB = apply_participation_ermes(dfB, filters_B)
+    
+    def apply_rupture_filter(df_metrics, F, prefix):
+        col = f"rupture_{prefix}"
+        if F["sel_rupture"] == "Oui":
+            return df_metrics[df_metrics[col] == True]
+        if F["sel_rupture"] == "Non":
+            return df_metrics[df_metrics[col] == False]
+        return df_metrics
+    
+    dfA = apply_rupture_filter(dfA, filters_A, "A")
+    dfB = apply_rupture_filter(dfB, filters_B, "B")
 
     # Harmonise magasins présents
     all_codes = sorted(set(dfA["code_magasin"]).union(set(dfB["code_magasin"])))
@@ -781,68 +896,6 @@ regression_plot(dfJ, "cout_fid_A",   "delta_pm",      "FID (SMS) A (€)",   "Δ
 regression_plot(dfJ, "cout_ermes_A", "delta_pm",      "ERMES A (€)",       "ΔPM (A - B) €",   "ΔPM ~ ERMES")
 regression_plot(dfJ, "cout_fid_A",   "delta_tickets", "FID (SMS) A (€)",   "ΔTickets (A - B)","ΔTickets ~ FID (SMS)")
 regression_plot(dfJ, "cout_ermes_A", "delta_tickets", "ERMES A (€)",       "ΔTickets (A - B)","ΔTickets ~ ERMES")
-st.divider()
-
-# --------------------- Diagnostic magasin par magasin ---------------------
-def diagnostic_meteo_vs_ca(row):
-    met = row["meteo_delta"]
-    ca  = row["pct_ca"]
-
-    if pd.isna(met) or pd.isna(ca):
-        return "Données insuffisantes"
-
-    # ⚡ Cas 1 : météo meilleure mais CA baisse → problème NON météo
-    if met > 0 and ca < 0:
-        return "❌ CA en baisse malgré météo meilleure → problème NON météo"
-
-    # ⚡ Cas 2 : météo meilleure ET CA augmente → cohérent
-    if met > 0 and ca > 0:
-        return "✔ CA cohérent (météo favorable)"
-
-    # ⚡ Cas 3 : météo pire ET CA baisse → météo explicative
-    if met < 0 and ca < 0:
-        return "🌧 Baisse expliquée par météo"
-
-    # ⚡ Cas 4 : météo pire mais CA augmente → très bonne perf
-    if met < 0 and ca > 0:
-        return "⭐ Excellente performance malgré météo défavorable"
-
-    # Météo égale → dépend d'autres facteurs
-    return "ℹ️ Météo similaire → variation due à autre facteur"
-
-dfJ["diagnostic_meteo_ca"] = dfJ.apply(diagnostic_meteo_vs_ca, axis=1)
-
-
-# --------------------- Tableau Diagnostic ---------------------
-diag_cols = [
-    "code_magasin",
-    "meteo_A", "meteo_B",
-    "meteo_score_A", "meteo_score_B", "meteo_delta",
-    "ca_A", "ca_B", "pct_ca",
-    "diagnostic_meteo_ca"
-]
-
-st.dataframe(
-    dfJ[diag_cols].sort_values("pct_ca", ascending=False),
-    use_container_width=True
-)
-
-
-# --------------------- Synthèse globale ---------------------
-nb_non_meteo = dfJ["diagnostic_meteo_ca"].str.contains("problème NON météo", na=False).sum()
-nb_meteo_explique = dfJ["diagnostic_meteo_ca"].str.contains("expliquée par météo", na=False).sum()
-nb_perf_malgre = dfJ["diagnostic_meteo_ca"].str.contains("malgré météo défavorable", na=False).sum()
-
-st.markdown(f"""
-### 🧠 Synthèse automatique
-- ❌ **{nb_non_meteo} magasins** : CA en baisse **non expliqué par météo**
-- 🌧 **{nb_meteo_explique} magasins** : baisse **expliquée par météo**
-- ⭐ **{nb_perf_malgre} magasins** : performance **malgré météo défavorable**
-
-👉 Cette synthèse te permet immédiatement de savoir  
-**si les problèmes de performances sont dus à la météo ou non**.
-""")
-
 st.divider()
 
 # ---------------------- TOP & FLOP MAGASINS (sans matplotlib) ---------
