@@ -88,9 +88,9 @@ def query(sql: str, params=None) -> pd.DataFrame:
 
 # ---------------------------- CONSTANTES ------------------------------
 OPS = {
-    "Anniversaire 2025 semaine 40": (pd.Timestamp("2025-10-01"), pd.Timestamp("2025-10-05")),
-    "Anniversaire 2024 semaine 41": (pd.Timestamp("2024-10-09"), pd.Timestamp("2024-10-13")),
-    "Semaine 40 2024": (pd.Timestamp("2024-10-02"), pd.Timestamp("2024-10-06")),
+    "Anniversaire 2024": (pd.Timestamp("2024-10-09"), pd.Timestamp("2024-10-13")),
+    "Anniversaire 2025": (pd.Timestamp("2025-10-01"), pd.Timestamp("2025-10-05")),
+    "Roch Hachana 2024": (pd.Timestamp("2024-10-02"), pd.Timestamp("2024-10-06")),
 }
 BANNED_RAYONS = {"evenements de la vie", "transmission florale"}   # normalisés
 COUT_FIXE_RATE = 0.40
@@ -782,6 +782,232 @@ regression_plot(dfJ, "cout_ermes_A", "delta_pm",      "ERMES A (€)",       "Δ
 regression_plot(dfJ, "cout_fid_A",   "delta_tickets", "FID (SMS) A (€)",   "ΔTickets (A - B)","ΔTickets ~ FID (SMS)")
 regression_plot(dfJ, "cout_ermes_A", "delta_tickets", "ERMES A (€)",       "ΔTickets (A - B)","ΔTickets ~ ERMES")
 st.divider()
+
+# ---------------------- MÉTÉO ↔ PERFORMANCE ---------------------------
+st.markdown("""
+### 🌦️ Comment la météo est notée ?
+Chaque séquence météo J1→J5 est convertie en **score météorologique**, permettant d’évaluer l’impact potentiel sur le CA.
+
+| Emoji | Signification               | Score |
+|-------|------------------------------|-------|
+| ☀️   | Soleil fort                   | +3 |
+| 🌤️   | Soleil léger                  | +2 |
+| ⛅   | Partiellement couvert         | +1 |
+| ☁️   | Nuageux                       | 0 |
+| 🌫️   | Brouillard                    | -1 |
+| 🌧️ / 🌦️ | Pluie                     | -1 |
+| ⛈️ / 🌩️ | Orage                      | -2 |
+| ❄️   | Neige                         | -3 |
+
+**Δ météo = Score A − Score B**  
+→ Positif = A a eu une météo meilleure  
+→ Négatif = B a eu une météo plus favorable  
+""")
+
+st.subheader("🌦️ Corrélation Météo ↔ Performance (ΔCA A vs B)")
+
+# --- Nouveau dictionnaire officiel ---
+WEATHER_SCORE = {
+    "☀️": 3,
+    "🌤️": 2,
+    "⛅": 1,
+    "☁️": 0,
+    "🌫️": -1,
+    "🌧️": -1, "🌦️": -1,
+    "⛈️": -2, "🌩️": -2,
+    "❄️": -3
+}
+
+def meteo_to_score(seq: str) -> int:
+    """
+    Transforme la séquence '☀️ 🌤️ 🌧️ ...' en score total.
+    """
+    if not isinstance(seq, str) or seq.strip() == "—":
+        return 0
+    total = 0
+    for emoji in seq.split():
+        total += WEATHER_SCORE.get(emoji, 0)
+    return total
+
+# --- Application des scores météo ---
+dfJ["meteo_score_A"] = dfJ["meteo_A"].apply(meteo_to_score)
+dfJ["meteo_score_B"] = dfJ["meteo_B"].apply(meteo_to_score)
+dfJ["meteo_delta"] = dfJ["meteo_score_A"] - dfJ["meteo_score_B"]
+
+# --- Corrélation météo ↔ variation de CA ---
+if dfJ["pct_ca"].notna().sum() > 2:
+    corr = dfJ["pct_ca"].corr(dfJ["meteo_delta"])
+    st.metric(
+        "Corrélation météo ↔ Variation CA",
+        f"{corr:+.2f}",
+        help="Corrélation de Pearson entre variation météo (A - B) et ΔCA (%)"
+    )
+
+    # --- Scatter : Δ météo vs Δ CA ---
+    fig_corr = px.scatter(
+        dfJ,
+        x="meteo_delta",
+        y="pct_ca",
+        color="pct_ca",
+        color_continuous_scale=["#d73027","#fdae61","#ffffbf","#a6d96a","#1a9850"],
+        hover_name="code_magasin",
+        title="Impact météo : ΔCA (%) en fonction de la variation météo (A - B)"
+    )
+
+    fig_corr.update_layout(
+        height=420,
+        xaxis_title="Δ Score météo (A - B)",
+        yaxis_title="Δ CA (%)",
+        paper_bgcolor="rgba(240,245,250,0.9)",
+        plot_bgcolor="rgba(235,240,245,0.9)"
+    )
+
+    st.plotly_chart(fig_corr, use_container_width=True)
+
+else:
+    st.info("Pas assez de données météo pour établir une corrélation fiable.")
+
+st.divider()
+
+# ======================================================================
+#               🚀 DIAGNOSTIC MÉTÉO ↔ PERFORMANCE (A vs B)
+# ======================================================================
+
+st.subheader("🌦️🔥 Diagnostic météo ↔ performance magasin par magasin")
+
+# --- Dictionnaire officiel des scores météo (TA TABLE EXACTE) ---
+METEO_SCORES = {
+    "☀️": 3,
+    "🌤️": 2,
+    "⛅": 1,
+    "☁️": 0,
+    "🌫️": -1,
+    "🌧️": -1, "🌦️": -1,
+    "⛈️": -2, "🌩️": -2,
+    "❄️": -3
+}
+
+def meteo_to_score_full(seq: str) -> int:
+    """Convertit une séquence météo J1→J5 en score global."""
+    if not isinstance(seq, str) or seq.strip() in ["—", ""]:
+        return 0
+    score = 0
+    for emoji, val in METEO_SCORES.items():
+        score += seq.count(emoji) * val
+    return score
+
+
+# --- Application des scores météo (A et B) ---
+dfJ["meteo_score_A"] = dfJ["meteo_A"].apply(meteo_to_score_full)
+dfJ["meteo_score_B"] = dfJ["meteo_B"].apply(meteo_to_score_full)
+dfJ["meteo_delta"]   = dfJ["meteo_score_A"] - dfJ["meteo_score_B"]
+
+
+# --------------------- Diagnostic magasin par magasin ---------------------
+def diagnostic_meteo_vs_ca(row):
+    met = row["meteo_delta"]
+    ca  = row["pct_ca"]
+
+    if pd.isna(met) or pd.isna(ca):
+        return "Données insuffisantes"
+
+    # ⚡ Cas 1 : météo meilleure mais CA baisse → problème NON météo
+    if met > 0 and ca < 0:
+        return "❌ CA en baisse malgré météo meilleure → problème NON météo"
+
+    # ⚡ Cas 2 : météo meilleure ET CA augmente → cohérent
+    if met > 0 and ca > 0:
+        return "✔ CA cohérent (météo favorable)"
+
+    # ⚡ Cas 3 : météo pire ET CA baisse → météo explicative
+    if met < 0 and ca < 0:
+        return "🌧 Baisse expliquée par météo"
+
+    # ⚡ Cas 4 : météo pire mais CA augmente → très bonne perf
+    if met < 0 and ca > 0:
+        return "⭐ Excellente performance malgré météo défavorable"
+
+    # Météo égale → dépend d'autres facteurs
+    return "ℹ️ Météo similaire → variation due à autre facteur"
+
+dfJ["diagnostic_meteo_ca"] = dfJ.apply(diagnostic_meteo_vs_ca, axis=1)
+
+
+# --------------------- Tableau Diagnostic ---------------------
+diag_cols = [
+    "code_magasin",
+    "meteo_A", "meteo_B",
+    "meteo_score_A", "meteo_score_B", "meteo_delta",
+    "ca_A", "ca_B", "pct_ca",
+    "diagnostic_meteo_ca"
+]
+
+st.dataframe(
+    dfJ[diag_cols].sort_values("pct_ca", ascending=False),
+    use_container_width=True
+)
+
+
+# --------------------- Synthèse globale ---------------------
+nb_non_meteo = dfJ["diagnostic_meteo_ca"].str.contains("problème NON météo", na=False).sum()
+nb_meteo_explique = dfJ["diagnostic_meteo_ca"].str.contains("expliquée par météo", na=False).sum()
+nb_perf_malgre = dfJ["diagnostic_meteo_ca"].str.contains("malgré météo défavorable", na=False).sum()
+
+st.markdown(f"""
+### 🧠 Synthèse automatique
+- ❌ **{nb_non_meteo} magasins** : CA en baisse **non expliqué par météo**
+- 🌧 **{nb_meteo_explique} magasins** : baisse **expliquée par météo**
+- ⭐ **{nb_perf_malgre} magasins** : performance **malgré météo défavorable**
+
+👉 Cette synthèse te permet immédiatement de savoir  
+**si les problèmes de performances sont dus à la météo ou non**.
+""")
+
+st.divider()
+
+# ---------------------- TOP & FLOP MAGASINS (sans matplotlib) ---------
+st.subheader("🏅 Top 5 & Flop 5 magasins – ΔCA (A vs B)")
+
+if not dfJ.empty:
+    top5 = dfJ.nlargest(5, "pct_ca")[["code_magasin","ca_A","ca_B","pct_ca","meteo_A","meteo_B"]]
+    flop5 = dfJ.nsmallest(5, "pct_ca")[["code_magasin","ca_A","ca_B","pct_ca","meteo_A","meteo_B"]]
+
+    def color_pct(val):
+        """Renvoie couleur CSS selon performance."""
+        if pd.isna(val):
+            return ""
+        if val > 0:  return "background-color: #d6f5d6;"  # vert clair
+        if val < 0:  return "background-color: #f8d6d6;"  # rouge clair
+        return ""
+
+    # ---- TOP 5 ----
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("### 🟩 Top 5 meilleurs magasins")
+        st.dataframe(
+            top5.style.applymap(color_pct, subset=["pct_ca"])
+                      .format({
+                          "ca_A": "{:,.0f} €".format,
+                          "ca_B": "{:,.0f} €".format,
+                          "pct_ca": lambda x: f"{x:+.1f}%"
+                      }),
+            use_container_width=True
+        )
+
+    # ---- FLOP 5 ----
+    with col2:
+        st.markdown("### 🟥 Flop 5 moins performants")
+        st.dataframe(
+            flop5.style.applymap(color_pct, subset=["pct_ca"])
+                       .format({
+                          "ca_A": "{:,.0f} €".format,
+                          "ca_B": "{:,.0f} €".format,
+                          "pct_ca": lambda x: f"{x:+.1f}%"
+                       }),
+            use_container_width=True
+        )
+else:
+    st.info("Aucune donnée disponible pour générer le Top/Flop.")
 
 # ---------------------- DÉTAIL PAR MAGASIN (A vs B) -------------------
 st.subheader("🧾 Détail par magasin (A vs B – filtres appliqués)")
