@@ -193,9 +193,9 @@ def query(sql: str, params=None) -> pd.DataFrame:
 
 # ---------------------------- CONSTANTES ------------------------------
 OPS = {
-    "Anniversaire 2024": (pd.Timestamp("2024-10-09"), pd.Timestamp("2024-10-13")),
-    "Anniversaire 2025": (pd.Timestamp("2025-10-01"), pd.Timestamp("2025-10-05")),
-    "Roch Hachana 2024": (pd.Timestamp("2024-10-02"), pd.Timestamp("2024-10-06")),
+    "Anniversaire 2025 semaine 40": (pd.Timestamp("2025-10-01"), pd.Timestamp("2025-10-05")),
+    "Anniversaire 2024 semaine 41": (pd.Timestamp("2024-10-09"), pd.Timestamp("2024-10-13")),
+    "Semaine 40 2024": (pd.Timestamp("2024-10-02"), pd.Timestamp("2024-10-06")),
 }
 BANNED_RAYONS = {"evenements de la vie", "transmission florale"}   # normalisés
 COUT_FIXE_RATE = 0.40
