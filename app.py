@@ -57,6 +57,7 @@ ALLOWED = {
     "t.vernageau@emova-group.com",
     "l.pasco@emova-group.com",
     "y.elogri@emova-group.com",
+    "g.raigneault@emova-group.com",
 }
 
 # Gestion de la session utilisateur
@@ -116,6 +117,7 @@ USER_NAMES = {
     "a.billat@emova-group.com": "Aude Billat",
     "t.vernageau@emova-group.com": "Thierry Vernageau",
     "l.pasco@emova-group.com": "Laetitia Pasco",
+    "vg.raigneault@emova-group.com": "Gwennan Raigneault"
     "y.elogri@emova-group.com": "Yasmine El ogri"
 }
 
